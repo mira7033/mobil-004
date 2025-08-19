@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>모바일 실시간 객체 인식</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding-top: 1rem;
+            padding-bottom: 1rem;
+        }
+        #video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            background-color: #000;
+        }
+        #video-container::before {
+            content: "";
+            display: block;
+            padding-top: 75%; /* 4:3 Aspect Ratio */
+        }
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container text-center">
+
+        <h1 class="h3 fw-bold mt-2">객체 인식 및 음성 안내 📷🔊</h1>
+        <p class="mb-3">스마트폰 후면 카메라로 사물을 비춰보세요.</p>
+
+        <div id="status" class="alert alert-info mx-auto" role="alert">
+            모델을 로딩 중입니다...
+        </div>
+
+        <div id="video-container" class="shadow-sm rounded overflow-hidden mb-3">
+            <video id="webcam" autoplay muted playsinline></video>
+            <canvas id="canvas"></canvas>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@latest/dist/coco-ssd.min.js"></script>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const statusDiv = document.getElementById('status');
+        const ctx = canvas.getContext('2d');
+
+        let model = undefined;
+        let previouslyDetected = new Set();
+
+        function speak(text) {
+            if (speechSynthesis.speaking) return;
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'ko-KR';
+            utterance.rate = 1.2;
+            speechSynthesis.speak(utterance);
+        }
+
+        // 모바일 안정성을 강화한 웹캠 설정 함수
+        async function setupWebcam() {
+            return new Promise((resolve, reject) => {
+                const constraints = {
+                    video: {
+                        facingMode: 'environment' // 후면 카메라 우선
+                    }
+                };
+                navigator.mediaDevices.getUserMedia(constraints)
+                    .then(stream => {
+                        video.srcObject = stream;
+                        video.addEventListener('loadeddata', resolve);
+                    })
+                    .catch(err => {
+                        console.warn('후면 카메라 실패. 전면 카메라로 재시도.');
+                        constraints.video.facingMode = 'user'; // 전면 카메라로 재시도
+                        navigator.mediaDevices.getUserMedia(constraints)
+                            .then(stream => {
+                                video.srcObject = stream;
+                                video.addEventListener('loadeddata', resolve);
+                            })
+                            .catch(reject);
+                    });
+            });
+        }
+
+        async function predict() {
+            if (model && video.readyState >= 3) { // 모델과 비디오가 준비되었을 때만 실행
+                const predictions = await model.detect(video);
+
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.font = '16px Arial';
+                ctx.textBaseline = 'top';
+
+                const currentDetections = new Set();
+                predictions.forEach(prediction => {
+                    const objectName = prediction.class;
+                    currentDetections.add(objectName);
+
+                    if (!previouslyDetected.has(objectName)) {
+                        speak(objectName);
+                    }
+                    
+                    const [x, y, width, height] = prediction.bbox;
+                    const label = `${objectName} (${Math.round(prediction.score * 100)}%)`;
+                    
+                    ctx.strokeStyle = '#00FFFF';
+                    ctx.lineWidth = 2.5;
+                    ctx.strokeRect(x, y, width, height);
+                    
+                    ctx.fillStyle = '#00FFFF';
+                    const textWidth = ctx.measureText(label).width;
+                    ctx.fillRect(x, y, textWidth + 8, 22);
+                    
+                    ctx.fillStyle = '#000000';
+                    ctx.fillText(label, x + 4, y + 2);
+                });
+                previouslyDetected = currentDetections;
+            }
+            requestAnimationFrame(predict);
+        }
+        
+        async function run() {
+            try {
+                statusDiv.innerText = '카메라 권한을 확인해주세요...';
+                await setupWebcam();
+                statusDiv.innerText = '카메라가 시작되었습니다.';
+                statusDiv.classList.replace('alert-info', 'alert-success');
+            } catch (e) {
+                console.error(e);
+                statusDiv.innerText = '카메라를 시작할 수 없습니다. 권한을 확인해주세요.';
+                statusDiv.classList.replace('alert-info', 'alert-danger');
+                return;
+            }
+
+            try {
+                statusDiv.innerText = '객체 인식 모델을 로딩합니다...';
+                statusDiv.classList.replace('alert-success', 'alert-info');
+                model = await cocoSsd.load();
+                statusDiv.innerText = '모델 로딩 완료! 인식을 시작합니다.';
+                statusDiv.classList.replace('alert-info', 'alert-success');
+                predict();
+            } catch (e) {
+                console.error(e);
+                statusDiv.innerText = '모델 로딩에 실패했습니다. 네트워크를 확인해주세요.';
+                statusDiv.classList.replace('alert-info', 'alert-danger');
+            }
+        }
+        run();
+    </script>
+</body>
+</html>
